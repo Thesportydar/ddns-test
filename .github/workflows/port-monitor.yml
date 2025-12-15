@@ -1,0 +1,75 @@
+name: Monitor puerto
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+env:
+  CACHE_KEY: monitor-${{ secrets.HOST }}-${{ secrets.PORT }}
+
+jobs:
+  check-port:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Restore last status
+        uses: actions/cache@v4
+        with:
+          path: status
+          key: ${{ env.CACHE_KEY }}
+          restore-keys: ${{ env.CACHE_KEY }}
+
+      - name: Load previous status
+        run: |
+          if [ -f status ]; then
+            PREV_STATUS=$(cat status)
+          else
+            PREV_STATUS="UNKNOWN"
+          fi
+          echo "PREV_STATUS=$PREV_STATUS" >> $GITHUB_ENV
+
+      - name: Check TCP port
+        run: |
+          if nc -z -w5 "${{ secrets.HOST }}" "${{ secrets.PORT }}"; then
+            echo "CURRENT_STATUS=UP" >> $GITHUB_ENV
+          else
+            echo "CURRENT_STATUS=DOWN" >> $GITHUB_ENV
+            exit 1
+          fi
+
+      - name: Save current status
+        if: always()
+        run: |
+          echo "$CURRENT_STATUS" > status
+
+      - name: Update cache
+        if: always()
+        uses: actions/cache@v4
+        with:
+          path: status
+          key: ${{ env.CACHE_KEY }}
+
+      - name: Notify DOWN
+        if: failure() && env.PREV_STATUS != 'DOWN'
+        uses: vineetchoudhary/mailgun-action@master
+        with:
+          api-key: ${{ secrets.API_KEY }}
+          domain: ${{ secrets.DOMAIN }}
+          to: ${{ secrets.TO }}
+          subject: "🚨 Puerto ${{ secrets.PORT }} CAÍDO"
+          text: |
+            El puerto ${{ secrets.PORT }} de ${{ secrets.HOST }} no responde.
+            Fecha: ${{ github.run_started_at }}
+
+      - name: Notify UP
+        if: success() && env.PREV_STATUS == 'DOWN'
+        uses: vineetchoudhary/mailgun-action@master
+        with:
+          api-key: ${{ secrets.API_KEY }}
+          domain: ${{ secrets.DOMAIN }}
+          to: ${{ secrets.TO }}
+          subject: "✅ Puerto ${{ secrets.PORT }} RECUPERADO"
+          text: |
+            El puerto ${{ secrets.PORT }} de ${{ secrets.HOST }} volvió a responder.
+            Fecha: ${{ github.run_started_at }}
